@@ -1,5 +1,11 @@
 package Backblaze::B2;
 use strict;
+use vars qw($VERSION);
+$VERSION = '0.01';
+
+=head1 NAME
+
+Backblaze::B2 - interface to the Backblaze B2 API
 
 =head1 SYNOPSIS
 
