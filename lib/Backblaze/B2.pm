@@ -117,7 +117,8 @@ sub new {
     $options{ file_class } ||= 'Backblaze::B2::v1::File';
     if( ! ref $options{ api }) {
         eval "require $options{ api }";
-        $options{ api } = $options{ api }->new();
+        my $class = delete $options{ api };
+        $options{ api } = $class->new(%options);
     };
     
     bless \%options => $class
@@ -150,7 +151,6 @@ the B2 account.
 
 sub buckets {
     my( $self ) = @_;
-    warn "Listing buckets";
     my $list = $self->api->list_buckets();
     map { $self->_new_bucket( %$_ ) }
         @{ $list->{buckets} }
@@ -318,6 +318,28 @@ sub upload_file {
 
     (my $res) = map { $self->_new_file( %$_, folder => $self ) } @res;
     $res
+}
+
+=head2 C<< ->download_file_by_name( %options ) >>
+
+Downloads a file from this bucket by name:
+
+    my $content = $bucket->download_file_by_name(
+        file => 'the/public/name.txt',
+    );
+
+This saves you searching through the list of existing files
+if you already know the filename.
+
+=cut
+
+sub download_file_by_name {
+    my( $self, %options ) = @_;
+    my $filename = delete $options{ file };
+    $self->api->download_file_by_name(
+        bucketName => $self->name,
+        fileName => $filename,
+    );
 }
 
 =head2 C<< ->api >>
@@ -741,7 +763,8 @@ sub upload_file {
     my $target_filename = delete $options{ target_name };
     $target_filename ||= $filename;
     $target_filename =~ s!\\!/!g;
-    $target_filename = uri_escape( encode('UTF-8', $target_filename ));
+    $target_filename = encode('UTF-8', $target_filename );
+    $target_filename =~ s!([^\x21-\x7d])!sprintf "%%%02x", ord $1!ge;
     
     my $mime_type = delete $options{ mime_type } || 'b2/x-auto';
     
@@ -784,7 +807,7 @@ sub upload_file {
 
 =head2 C<< $b2->list_files >>
 
-  my $list = $b2->listFiles(
+  my $list = $b2->list_files(
       startFileName => undef,
       maxFileCount => 1000, # maximum per round
       bucketId => ...,
@@ -805,6 +828,47 @@ sub list_files {
     my $guard; $guard = $self->request(
         api_endpoint => 'b2_list_files',
         cb => $self->make_json_response_decoder($res, \$guard),
+        %options
+    );
+    
+    $res
+}
+
+=head2 C<< $b2->download_file_by_name >>
+
+  my $content = $b2->download_file_by_name(
+      bucketName => $my_bucket_name,
+      fileName => $my_file_name,
+  );
+
+L<https://www.backblaze.com/b2/docs/b2_download_file_by_name.html>
+
+=cut
+
+sub download_file_by_name {
+    my( $self, %options ) = @_;
+    
+    croak "Need a bucket name"
+        unless defined $options{ bucketName };
+    croak "Need a file name"
+        unless defined $options{ fileName };
+    my $url = join '/',
+        $self->{credentials}->{downloadUrl},
+        delete $options{ bucketName },
+        delete $options{ fileName }
+        ;
+    $self->log_message(1, sprintf "Fetching %s", $url );
+
+    my $res = AnyEvent->condvar;
+    my $guard; $guard = $self->request(
+        url => $url,
+        cb => sub {
+            my( $body, $hdr ) = @_;
+            $self->log_message(2, sprintf "Fetching %s, received %d bytes", $url, length $body );
+            my $ok = $hdr->{Status} =~ /^2\d\d/;
+            undef $guard;
+            $res->send( $ok, $hdr->{Reason}, $body );
+        },
         %options
     );
     
