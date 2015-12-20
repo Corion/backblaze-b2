@@ -135,6 +135,10 @@ use AnyEvent;
 use AnyEvent::HTTP;
 #use URI::Template;
 use URI;
+use URI::Escape;
+use Digest::SHA1;
+use File::Basename;
+use Encode;
 use Data::Dumper;
 
 sub new {
@@ -246,8 +250,10 @@ sub request {
     my $completed = delete $options{ cb };
     my $method    = delete $options{ method };
     my $endpoint  = delete $options{ api_endpoint };
-    my $headers = delete $options{ headers };
-    $headers ||= { $self->get_headers };
+    my $headers = delete $options{ headers } || {};
+    $headers = { $self->get_headers, %$headers };
+    my $body = delete $options{ _body };
+    warn Dumper $headers;
         
     my $url;
     if( ! $options{url} ) {
@@ -271,6 +277,7 @@ sub request {
     return 
         http_request $method => $url,
             headers => $headers,
+            body => $body,
             $completed,
     ;
 }
@@ -378,7 +385,7 @@ sub delete_bucket {
 
   $b2->list_buckets();
 
-L<https://www.backblaze.com/b2/docs/b2_listbuckets.html>
+L<https://www.backblaze.com/b2/docs/b2_list_buckets.html>
 
 =cut
 
@@ -390,6 +397,101 @@ sub list_buckets {
     my $res = AnyEvent->condvar;
     my $guard; $guard = $self->request(api_endpoint => 'b2_list_buckets',
         accountId => $options{ accountId },
+        cb => $self->make_json_response_decoder($res, \$guard),
+        %options
+    );
+    
+    $res
+}
+
+=head2 C<< $b2->get_upload_url >>
+
+  my $upload_handle = $b2->get_upload_url();
+  $b2->upload_file( file => $file, handle => $upload_handle );
+
+L<https://www.backblaze.com/b2/docs/b2_get_upload_url.html>
+
+=cut
+
+sub get_upload_url {
+    my( $self, %options ) = @_;
+    
+    croak "Need a bucketId"
+        unless defined $options{ bucketId };
+
+    my $res = AnyEvent->condvar;
+    my $guard; $guard = $self->request(api_endpoint => 'b2_get_upload_url',
+        cb => $self->make_json_response_decoder($res, \$guard),
+        %options
+    );
+    
+    $res
+}
+
+
+=head2 C<< $b2->upload_file >>
+
+  my $upload_handle = $b2->get_upload_url();
+  $b2->upload_file(
+      file => $file,
+      handle => $upload_handle
+  );
+
+L<https://www.backblaze.com/b2/docs/b2_upload_file.html>
+
+Note: This method loads the complete file to be uploaded
+into memory.
+
+=cut
+
+sub upload_file {
+    my( $self, %options ) = @_;
+    
+    croak "Need an upload handle"
+        unless defined $options{ handle };
+    my $handle = delete $options{ handle };
+
+    croak "Need a source file name"
+        unless defined $options{ file };
+    my $filename = delete $options{ file };
+        
+    my $target_filename = delete $options{ target_name };
+    $target_filename ||= $filename;
+    $target_filename =~ s!\\!/!g;
+    $target_filename = uri_escape( encode('UTF-8', $target_filename ));
+    
+    my $mime_type = delete $options{ mime_type } || 'b2/x-auto';
+    
+    if( not defined $options{ content }) {
+        open my $fh, '<', $filename
+            or croak "Couldn't open '$filename': $!";
+        binmode $fh, ':raw';
+        $options{ content } = do { local $/; <$fh> }; # sluuuuurp
+        $options{ mtime } = ((stat($fh))[9]) * 1000;
+    };
+
+    my $payload = delete $options{ content };
+    if( not $options{ sha1 }) {
+        my $sha1 = Digest::SHA1->new;
+        $sha1->add( $payload );
+        $options{ sha1 } = $sha1->hexdigest;
+    };
+    my $digest = delete $options{ sha1 };
+    my $size = length($payload);
+    my $mtime = delete $options{ mtime };
+
+    my $res = AnyEvent->condvar;
+    my $guard; $guard = $self->request(
+        url => $handle->{uploadUrl},
+        method => 'POST',
+        _body => $payload,
+        headers => {
+            'Content-Type' => $mime_type,
+            'Content-Length' => $size,
+            'X-Bz-Content-Sha1' => $digest,
+            'X-Bz-File-Name' => $target_filename,
+            'Authorization' => $handle->{authorizationToken},
+        },
         cb => $self->make_json_response_decoder($res, \$guard),
         %options
     );
