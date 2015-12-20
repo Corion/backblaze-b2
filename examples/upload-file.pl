@@ -24,9 +24,10 @@ if( ! $credentials->{authorizationToken}) {
     $b2->authorize_account(%$credentials);
 };
 
-my $handle = $b2->get_upload_url( bucketId => $bucket_id );
 
 for my $file (@files) {
+    # Currently we need a new upload URL for every file:
+    my $handle = $b2->get_upload_url( bucketId => $bucket_id );
     use Data::Dumper;
     warn Dumper 
     $b2->upload_file(
