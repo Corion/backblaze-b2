@@ -21,13 +21,13 @@ L<https://www.backblaze.com/b2/docs/b2_authorize_account.html>
 
 my $b2 = Backblaze::B2->new(
     version => 'v1',
-    log_message => sub { warn sprintf "[%d] %s\n"; },
+    log_message => sub { warn sprintf "[%d] %s\n", @_; },
 );
 
 my $credentials = $b2->read_credentials( $credentials_file );
 
 use Data::Dumper;
-my $app_credentials = $b2->authorize_account(
+my ($app_credentials) = $b2->authorize_account(
     %$credentials
 );
 
