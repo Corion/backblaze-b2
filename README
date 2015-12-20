@@ -1,0 +1,107 @@
+NAME
+
+    Backblaze::B2 - interface to the Backblaze B2 API
+
+SYNOPSIS
+
+METHODS
+
+ Backblaze::B2->new %options
+
+    version
+
+      Allows you to specify the API version. The current default is v1,
+      which corresponds to the Backblaze B2 API version 1 as documented at
+      https://www.backblaze.com/b2/docs/.
+
+SETUP
+
+    0
+
+      Have a telephone / mobile phone number you're willing to share with
+      Backblaze
+
+    1
+
+      Register at for Backblaze B2 Cloud Storage at
+
+      https://secure.backblaze.com/account_settings.htm?showPhone=true
+
+    2
+
+      Add the phone number to your account at
+
+      https://secure.backblaze.com/account_settings.htm?showPhone=true
+
+    2
+
+      Enable Two-Factor verification through your phone at
+
+      https://secure.backblaze.com/account_settings.htm?showPhone=true
+
+    3
+
+      Create a JSON file named B2.credentials in your home directory with
+      the application key and the account key:
+
+          { "accountId":      "...",
+            "applicationKey": ".............."
+          }
+
+ $b2->create_bucket
+
+      $b2->create_bucket(
+          bucketName => 'my_files',
+          bucketType => 'allPrivate',
+      );
+
+    Bucket names can consist of: letters, digits, "-", and "_".
+
+    https://www.backblaze.com/b2/docs/b2_create_bucket.html
+
+    The bucketName has to be globally unique, so expect this request to
+    fail, a lot.
+
+ $b2->delete_bucket
+
+      $b2->delete_bucket(
+          bucketId => ...,
+      );
+
+    Bucket names can consist of: letters, digits, "-", and "_".
+
+    https://www.backblaze.com/b2/docs/b2_delete_bucket.html
+
+    The bucket must be empty of all versions of all files.
+
+ $b2->list_buckets
+
+      $b2->list_buckets();
+
+    https://www.backblaze.com/b2/docs/b2_listbuckets.html
+
+POD ERRORS
+
+    Hey! The above document had some coding errors, which are explained
+    below:
+
+    Around line 31:
+
+      Expected text after =item, not a number
+
+    Around line 37:
+
+      Expected text after =item, not a number
+
+    Around line 43:
+
+      Expected text after =item, not a number
+
+    Around line 49:
+
+      Expected text after =item, not a number
+
+    Around line 59:
+
+      You forgot a '=back' before '=head2'
+
