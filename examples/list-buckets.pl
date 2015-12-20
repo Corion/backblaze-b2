@@ -24,11 +24,7 @@ if( ! $credentials->{authorizationToken}) {
     $b2->authorize_account(%$credentials);
 };
 
-use Data::Dumper;
-
-my $buckets = $b2->list_buckets()->{buckets};
-
-for my $bucket (@$buckets) {
-    print join "\t", $bucket->{bucketName}, $bucket->{bucketType}, $bucket->{bucketId};
+for my $bucket ($b2->buckets()) {
+    print join "\t", $bucket->name, $bucket->type, $bucket->id;
     print "\n";
 };

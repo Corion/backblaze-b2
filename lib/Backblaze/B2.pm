@@ -67,6 +67,138 @@ with the application key and the account key:
 
 package Backblaze::B2::v1;
 use strict;
+
+=head1 NAME
+
+Backblaze::B2::v1 - Backblaze B2 API account
+
+=head1 METHODS
+
+=head2 C<< ->new %options >>
+
+    my $b2 = Backblaze::B2::v1->new(
+        api => 'Backblaze::B2::v1::Synchronous', # the default
+    );
+
+Creates a new instance. Depending on whether you pass in
+C<<Backblaze::B2::v1::Synchronous>> or C<<Backblaze::B2::v1::AnyEvent>>,
+you will get a synchronous or asynchronous API.
+
+The synchronous API is what is documented here, as this is the
+most likely use case.
+
+    my @buckets = $b2->buckets();
+    for( @buckets ) {
+        ...
+    }
+
+The asynchronous API is identical to the synchronous API in spirit, but
+will return L<AnyEvent> condvar's. These condvars return
+two or more parameters upon completion:
+
+    my $cv = $b2->buckets();
+    my( $ok, $msg, @buckets ) = $cv->recv();
+    if( ! $ok ) {
+        die "Error: $msg";
+    };
+    for( @buckets ) {
+        ...
+    }
+
+The asynchronous API puts the burden of error handling into your code.
+
+=cut
+
+sub new {
+    my( $class, %options ) = @_;
+    
+    $options{ api } ||= 'Backblaze::B2::v1::Synchronous';
+    $options{ bucket_class } ||= 'Backblaze::B2::v1::Bucket';
+    if( ! ref $options{ api }) {
+        eval "require $options{ api }";
+        $options{ api } = $options{ api }->new();
+    };
+    
+    bless \%options => $class
+}
+
+sub read_credentials {
+    my( $self, @args ) = @_;
+    $self->api->read_credentials(@args)
+}
+
+sub _new_bucket {
+    my( $self, %options ) = @_;
+    $self->{bucket_class}->new( %options, api => $self->api, parent => $self )
+}
+
+=head2 C<< ->buckets >>
+
+    my @buckets = $b2->buckets();
+
+Returns a list of L<Backblaze::B2::Bucket> objects associated with
+the B2 account.
+
+=cut
+
+sub buckets {
+    my( $self ) = @_;
+    my $list = $self->api->list_buckets();
+    map { $self->_new_bucket->new( %$_ ) }
+        @{ $list->{buckets} }
+}
+
+=head2 C<< ->create_bucket >>
+
+    my $new_bucket = $b2->create_bucket(
+        name => 'my-new-bucket', # only /[A-Za-z0-9-]/i are allowed as bucket names
+        type => 'allPrivate', # or allPublic
+    );
+
+Creates a new bucket and returns it.
+
+=cut
+
+sub create_bucket {
+    my( $self, %options ) = @_;
+    $options{ type } ||= 'allPrivate';
+    my $bucket = $self->api->create_bucket(
+        bucketName => $options{ name },
+        bucketType => $options{ type },
+    );
+    $self->_new_bucket( $bucket );
+}
+
+=head2 C<< ->api >>
+
+Returns the underlying API object
+
+=cut
+
+sub api { $_[0]->{api} }
+
+1;
+
+package Backblaze::B2::v1::Bucket;
+use strict;
+use Scalar::Util 'weaken';
+
+sub new {
+    my( $class, %options ) = @_;
+    weaken $options{ parent };
+    bless \%options => $class,
+}
+
+sub name { $_[0]->{bucketName} }
+sub id { $_[0]->{bucketId} }
+sub type { $_[0]->{bucketType} }
+sub account { $_[0]->{parent} }
+
+sub files {
+}
+
+package Backblaze::B2::v1::Synchronous;
+use strict;
 use vars qw($AUTOLOAD);
 use Carp qw(croak);
 use JSON::XS 'decode_json';
@@ -75,6 +207,14 @@ use vars '$API_BASE';
 $API_BASE = 'https://api.backblaze.com/b2api/v1/';
 
 sub api { $_[0]->{api} }
+
+=head1 METHODS
+
+=head2 C<< ->new >>
+
+Creates a new synchronous instance.
+
+=cut
 
 sub new {
     my( $class, %options ) = @_;
@@ -434,6 +574,9 @@ L<https://www.backblaze.com/b2/docs/b2_upload_file.html>
 
 Note: This method loads the complete file to be uploaded
 into memory.
+
+Note: The Backblaze B2 API is vague about when you need
+a new upload URL.
 
 =cut
 

@@ -42,6 +42,7 @@ WriteMakefile1(
                         'AnyEvent'        => '0',
                         'AnyEvent::HTTP'  => '0',
                         'URI'             => '0',
+                        'Scalar::Util'    => '0', # for &weaken
                       }, # e.g., Module::Name => 1.1
     ABSTRACT_FROM   => $module_pm, # retrieve abstract from module
     AUTHOR          => 'Max Maischein <corion@cpan.org>',
