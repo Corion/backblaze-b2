@@ -177,7 +177,11 @@ sub read_credentials {
 };
 
 sub make_json_response_decoder {
-    my( $self, $res ) = @_;
+    my( $self, $res, $req ) = @_;
+    
+    die "Need a HTTP request handle to hold on to"
+        unless $req;
+    
     return sub {
         my($body,$hdr) = @_;
         
@@ -195,6 +199,7 @@ sub make_json_response_decoder {
             };
             $res->send(1, "", $b);
         };
+        undef $req;
         undef $res;
     };
 }
@@ -279,7 +284,6 @@ sub authorize_account {
     my $auth= encode_base64( "$options{accountId}:$options{ applicationKey }" );
 
     my $res = AnyEvent->condvar();
-    my $handle;
     my $store_credentials = sub {
         
         my( $cv ) = @_;
@@ -287,17 +291,16 @@ sub authorize_account {
         $self->log_message(1, sprintf "Storing authorization token");
         $self->{credentials} = $cred;
         undef $self;
-        undef $handle;
         $res->send($ok, $msg, $cred);
     };    
     my $got_credentials = AnyEvent->condvar( cb => $store_credentials );
     my $url = $self->{api_base} . "b2_authorize_account";
-    $handle = $self->request(
+    my $handle; $handle = $self->request(
         url => $url,
         headers => {
             "Authorization" => "Basic $auth"
         },
-        cb => $self->make_json_response_decoder($got_credentials),
+        cb => $self->make_json_response_decoder($got_credentials, \$handle),
     );
         
     $res
@@ -332,7 +335,7 @@ sub create_bucket {
         accountId => $options{ accountId },
         bucketName => $options{ bucketName },
         bucketType => $options{ bucketType },
-        cb => $self->make_json_response_decoder($res),
+        cb => $self->make_json_response_decoder($res, \$guard),
         %options
     );
     
@@ -364,7 +367,7 @@ sub delete_bucket {
     my $guard; $guard = $self->request(api_endpoint => 'b2_delete_bucket',
         accountId => $options{ accountId },
         bucketId => $options{ bucketId },
-        cb => $self->make_json_response_decoder($res),
+        cb => $self->make_json_response_decoder($res, \$guard),
         %options
     );
     
@@ -387,7 +390,7 @@ sub list_buckets {
     my $res = AnyEvent->condvar;
     my $guard; $guard = $self->request(api_endpoint => 'b2_list_buckets',
         accountId => $options{ accountId },
-        cb => $self->make_json_response_decoder($res),
+        cb => $self->make_json_response_decoder($res, \$guard),
         %options
     );
     
