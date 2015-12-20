@@ -116,7 +116,7 @@ sub AUTOLOAD {
         if( ! $ok ) {
             croak $msg;
         } else {
-            return @results
+            return wantarray ? @results : $results[0]
         };
     };
 
