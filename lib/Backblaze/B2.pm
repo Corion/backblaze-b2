@@ -114,6 +114,7 @@ sub new {
     
     $options{ api } ||= 'Backblaze::B2::v1::Synchronous';
     $options{ bucket_class } ||= 'Backblaze::B2::v1::Bucket';
+    $options{ file_class } ||= 'Backblaze::B2::v1::File';
     if( ! ref $options{ api }) {
         eval "require $options{ api }";
         $options{ api } = $options{ api }->new();
@@ -129,7 +130,13 @@ sub read_credentials {
 
 sub _new_bucket {
     my( $self, %options ) = @_;
-    $self->{bucket_class}->new( %options, api => $self->api, parent => $self )
+    # Should this one magically unwrap AnyEvent::condvar objects?!
+    $self->{bucket_class}->new(
+        %options,
+        api => $self->api,
+        parent => $self,
+        file_class => $self->{file_class}
+    )
 }
 
 =head2 C<< ->buckets >>
@@ -143,8 +150,9 @@ the B2 account.
 
 sub buckets {
     my( $self ) = @_;
+    warn "Listing buckets";
     my $list = $self->api->list_buckets();
-    map { $self->_new_bucket->new( %$_ ) }
+    map { $self->_new_bucket( %$_ ) }
         @{ $list->{buckets} }
 }
 
@@ -154,6 +162,8 @@ sub buckets {
         name => 'my-new-bucket', # only /[A-Za-z0-9-]/i are allowed as bucket names
         type => 'allPrivate', # or allPublic
     );
+    
+    print sprintf "Created new bucket %s\n", $new_bucket->id;
 
 Creates a new bucket and returns it.
 
@@ -166,7 +176,7 @@ sub create_bucket {
         bucketName => $options{ name },
         bucketType => $options{ type },
     );
-    $self->_new_bucket( $bucket );
+    $self->_new_bucket( %$bucket );
 }
 
 =head2 C<< ->api >>
@@ -194,8 +204,147 @@ sub id { $_[0]->{bucketId} }
 sub type { $_[0]->{bucketType} }
 sub account { $_[0]->{parent} }
 
-sub files {
+sub _new_file {
+    my( $self, %options ) = @_;
+    # Should this one magically unwrap AnyEvent::condvar objects?!
+    $self->{file_class}->new(
+        %options,
+        api => $self->api,
+        bucket => $self
+    );
 }
+
+=head2 C<< ->files( %options ) >>
+
+Lists the files contained in this bucket
+
+    my @files = $bucket->files(
+        startFileName => undef,
+    );
+
+By default it returns only the first 1000
+files, but see the C<allFiles> parameter.
+
+=over 4
+
+=item C<< allFiles >>
+
+    allFiles => 1
+
+Passing in a true value for this parameter will make
+as many API calls as necessary to fetch all files.
+
+=back
+
+=cut
+
+sub files {
+    my( $self, %options ) = @_;
+    $options{ maxFileCount } ||= 1000;
+    $options{ startFileName } ||= undef;
+    
+    my @res;
+    
+    my $fetch_more= 1;
+    while( $fetch_more ) {
+        my $files = $self->api->list_files(
+            bucketId => $self->id,
+            %options,
+        );
+        push @res, @{ $files->{files} };
+        $fetch_more = $options{ allFiles } && $files->{endFileName};
+    };
+    map { $self->_new_file( %$_, folder => $self ) } @res
+}
+
+=head2 C<< ->upload_file( %options ) >>
+
+Uploads a file into this bucket, potentially creating
+a new file version.
+
+    my $new_file = $bucket->upload_file(
+        file => 'some/local/file.txt',
+        target_file => 'the/public/name.txt',
+    );
+
+=over 4
+
+=item C<< file >>
+
+Local name of the source file. This file will be loaded
+into memory in one go.
+
+=item C<< target_file >>
+
+Name of the file on the B2 API. Defaults to the local name.
+
+The target file name will have backslashes replaced by forward slashes
+to comply with the B2 API.
+
+=item C<< mime_type >>
+
+Content-type of the stored file. Defaults to autodetection by the B2 API.
+
+=item C<< content >>
+
+If you don't have the local content in a file on disk, you can
+pass the content in as a string.
+
+=item C<< mtime >>
+
+Time in miliseconds since the epoch to when the content was created.
+Defaults to the current time.
+
+=item C<< sha1 >>
+
+Hexdigest of the SHA1 of the content. If this is missing, the SHA1
+will be calculated upon upload.
+
+=back
+
+=cut
+
+sub upload_file {
+    my( $self, %options ) = @_;
+
+    # XXX We are synchronous here!
+    my $upload_handle = $self->api->get_upload_url(
+        bucketId => $self->id,
+    );
+    my @res = $self->api->upload_file(
+        %options,
+        handle => $upload_handle
+    );
+
+    (my $res) = map { $self->_new_file( %$_, folder => $self ) } @res;
+    $res
+}
+
+=head2 C<< ->api >>
+
+Returns the underlying API object
+
+=cut
+
+sub api { $_[0]->{api} }
+
+package Backblaze::B2::v1::File;
+use strict;
+use Scalar::Util 'weaken';
+
+sub new {
+    my( $class, %options ) = @_;
+    weaken $options{ folder };
+    bless \%options => $class,
+}
+
+sub name { $_[0]->{fileName} }
+sub id { $_[0]->{fileId} }
+sub action { $_[0]->{action} }
+sub folder { $_[0]->{folder} }
+sub size { $_[0]->{size} }
+
+1;
 
 package Backblaze::B2::v1::Synchronous;
 use strict;
@@ -386,7 +535,6 @@ sub request {
     my $headers = delete $options{ headers } || {};
     $headers = { $self->get_headers, %$headers };
     my $body = delete $options{ _body };
-    warn Dumper $headers;
         
     my $url;
     if( ! $options{url} ) {
@@ -561,7 +709,6 @@ sub get_upload_url {
     $res
 }
 
-
 =head2 C<< $b2->upload_file >>
 
   my $upload_handle = $b2->get_upload_url();
@@ -628,6 +775,35 @@ sub upload_file {
             'X-Bz-File-Name' => $target_filename,
             'Authorization' => $handle->{authorizationToken},
         },
+        cb => $self->make_json_response_decoder($res, \$guard),
+        %options
+    );
+    
+    $res
+}
+
+=head2 C<< $b2->list_files >>
+
+  my $list = $b2->listFiles(
+      startFileName => undef,
+      maxFileCount => 1000, # maximum per round
+      bucketId => ...,
+      
+  );
+
+L<https://www.backblaze.com/b2/docs/b2_list_files.html>
+
+=cut
+
+sub list_files {
+    my( $self, %options ) = @_;
+    
+    croak "Need a bucket id"
+        unless defined $options{ bucketId };
+
+    my $res = AnyEvent->condvar;
+    my $guard; $guard = $self->request(
+        api_endpoint => 'b2_list_files',
         cb => $self->make_json_response_decoder($res, \$guard),
         %options
     );

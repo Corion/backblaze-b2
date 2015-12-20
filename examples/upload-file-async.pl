@@ -8,7 +8,7 @@ GetOptions(
     'c|credentials:s' => \my $credentials_file,
 );
 
-my ($bucket_name, @files) = @ARGV;
+my ($bucket_id, @files) = @ARGV;
 
 =head1 SYNOPSIS
 
@@ -24,18 +24,14 @@ if( ! $credentials->{authorizationToken}) {
     $b2->authorize_account(%$credentials);
 };
 
-(my $bucket) = grep { $_->name =~ /$bucket_name/ or $_->id eq $bucket_name }
-               sort { $a->name cmp $b->name }
-               $b2->buckets;
 
-if( ! $bucket ) {
-    die "No bucket found with name matching '$bucket_name'";
-};
-
-print sprintf "Uploading to bucket %s\n", $bucket->name;
 for my $file (@files) {
-    my $f = $bucket->upload_file(
+    # Currently we need a new upload URL for every file:
+    my $handle = $b2->get_upload_url( bucketId => $bucket_id );
+    use Data::Dumper;
+    warn Dumper 
+    $b2->upload_file(
         file => $file,
+        handle => $handle
     );
-    print sprintf "Uploaded %s\n", $f->name;
 };
