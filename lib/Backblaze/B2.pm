@@ -129,6 +129,12 @@ sub read_credentials {
     $self->api->read_credentials(@args)
 }
 
+# XXX Synchronous...
+sub authorize_account {
+    my( $self, @args ) = @_;
+    $self->api->authorize_account(@args)
+}
+
 sub _new_bucket {
     my( $self, %options ) = @_;
     # Should this one magically unwrap AnyEvent::condvar objects?!
