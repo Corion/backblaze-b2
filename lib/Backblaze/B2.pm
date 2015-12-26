@@ -510,8 +510,14 @@ sub make_json_response_decoder {
             if( my $err = $@ ) {
                 $self->log_message(4, sprintf "Error decoding JSON response body: %s", $err);
                 $res->send(0, sprintf("Error decoding JSON response body: %s", $err), $hdr);
+            } elsif( $hdr->{Status} =~ /^[45]\d\d$/ ) {
+                my $reason = $b->{message} || $hdr->{Reason};
+                my $status = $b->{status}  || $hdr->{Status};
+                $self->log_message(4, sprintf "HTTP error status: %s: %s", $status, $reason);
+                $res->send(0, sprintf(sprintf "HTTP error status: %s: %s", $status, $reason));
+            } else {
+                $res->send(1, "", $b);
             };
-            $res->send(1, "", $b);
         };
         undef $req;
         undef $res;
