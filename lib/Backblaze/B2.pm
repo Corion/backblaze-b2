@@ -77,6 +77,7 @@ with the application key and the account key:
 
 package Backblaze::B2::v1;
 use strict;
+use Carp qw(croak);
 
 =head1 NAME
 
@@ -171,11 +172,10 @@ sub await($) {
     my $promise = $_[0];
     my @res;
     if( $promise->is_unfulfilled ) {
-        warn "Waiting";
         require AnyEvent;
         my $await = AnyEvent->condvar;
         $promise->then(sub{
-            $await->send(@_)
+            $await->send(@_);
         }, sub {
             warn "@_";
         });
@@ -186,6 +186,12 @@ sub await($) {
     }
     @res
 };
+
+sub payload($) {
+    my( $ok, $msg, @results ) = await( $_[0] );
+    if(! $ok) { croak $msg };
+    return wantarray ? @results : $results[0];
+}
 
 =head2 C<< ->buckets >>
 
@@ -205,7 +211,9 @@ sub buckets {
     });
     
     if( !$self->api->isAsync ) {
-        Backblaze::B2::v1::await $list
+        return Backblaze::B2::v1::payload $list
+    } else {
+        return $list
     }
 }
 
@@ -241,7 +249,7 @@ Creates a new bucket and returns it.
 sub create_bucket {
     my( $self, %options ) = @_;
     $options{ type } ||= 'allPrivate';
-    my $b = $self->api->create_bucket(
+    my $b = $self->api->asyncApi->create_bucket(
         bucketName => $options{ name },
         bucketType => $options{ type },
     )->then( sub {
@@ -250,7 +258,7 @@ sub create_bucket {
     });
 
     if( !$self->api->isAsync ) {
-        Backblaze::B2::v1::await $b
+        Backblaze::B2::v1::payload $b
     }
 }
 
@@ -325,7 +333,7 @@ sub files {
     # XXX this needs to be turned into a Promises-based loop.
     my $fetch_more= 1;
     while( $fetch_more ) {
-        my $files = $self->api->list_files(
+        my $files = $self->api->asyncApi->list_files(
             bucketId => $self->id,
             %options,
         );
@@ -390,8 +398,6 @@ sub upload_file {
         bucketId => $self->id,
     )->then(sub {
         my( $ok, $msg, $upload_handle ) = @_;
-        use Data::Dumper;
-        warn Dumper \%options;
         $api->upload_file(
             %options,
             handle => $upload_handle
@@ -419,7 +425,7 @@ if you already know the filename.
 
 sub download_file_by_name {
     my( $self, %options ) = @_;
-    $self->api->download_file_by_name(
+    $self->api->asyncApi->download_file_by_name(
         bucketName => $self->name,
         %options
     );
@@ -461,6 +467,7 @@ sub AUTOLOAD {
         my $self = shift;
         warn "In <$namespace\::$method>";
         my( $ok, $msg, @results) = Backblaze::B2::v1::await $self->impl->$method( @_ );
+        warn "Results: $ok/$msg/@results";
         if( ! $ok ) {
             croak $msg;
         } else {
@@ -488,7 +495,7 @@ sub impl { $_[0]->{impl} }
 
 sub _new_file {
     my( $self, %options ) = @_;
-    # Should this one magically unwrap AnyEvent::condvar objects?!
+
     $self->{file_class}->new(
         %options,
         api => $self->api,
@@ -523,7 +530,7 @@ as many API calls as necessary to fetch all files.
 sub files {
     my( $self, %options ) = @_;
     map { $self->_new_file( impl => $_ ) }
-        Backblaze::B2::v1::await $self->impl->files( %options );
+        Backblaze::B2::v1::payload $self->impl->files( %options );
 }
 
 =head2 C<< ->upload_file( %options ) >>
@@ -576,7 +583,7 @@ will be calculated upon upload.
 sub upload_file {
     my( $self, %options ) = @_;
 
-    Backblaze::B2::v1::await $self->impl->upload_file( %options );
+    Backblaze::B2::v1::payload $self->impl->upload_file( %options );
 }
 
 =head2 C<< ->download_file_by_name( %options ) >>
@@ -594,9 +601,9 @@ if you already know the filename.
 
 sub download_file_by_name {
     my( $self, %options ) = @_;
-    Backblaze::B2::v1::await $self->impl->download_file_by_name(
+    return Backblaze::B2::v1::payload $self->impl->download_file_by_name(
         %options
-    );
+    )
 }
 
 =head2 C<< ->api >>

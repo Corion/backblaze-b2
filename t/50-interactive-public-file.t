@@ -44,7 +44,7 @@ if( ! $bucket) {
 };
 
 diag "Uploading $0 to public test bucket";
-my ($ok,$msg,$f) = $bucket->upload_file(
+my $f = $bucket->upload_file(
     file => $0,
     target_name => 'my_file.t',
 );
@@ -57,8 +57,8 @@ my $fetch_as = $f->name;
 $fetch_as =~ s!\\!/!g; # just in case we ran on Windows
 # Backblaze doesn't want to serve backslashes in their filenames
 
-print sprintf "Downloading from bucket %s\n", $bucket->name;
-my ($ok,$msg,$content) = $bucket->download_file_by_name(
+diag sprintf "Downloading from bucket %s\n", $bucket->name;
+my $content = $bucket->download_file_by_name(
     fileName => $fetch_as,
 );
     

@@ -90,9 +90,6 @@ sub decode_json_response {
         };
     };
     
-    use Data::Dumper;
-    warn Dumper \@result;
-    
     @result
 }
 
@@ -401,7 +398,6 @@ sub upload_file {
     my $size = length($payload);
     my $mtime = delete $options{ mtime };
 
-    warn "Storing as <$target_filename> from $handle->{uploadUrl}";
     $self->json_request(
         url => $handle->{uploadUrl},
         method => 'POST',
@@ -462,6 +458,7 @@ sub download_file_by_name {
         unless defined $options{ fileName };
     my $url = join '/',
         $self->{credentials}->{downloadUrl},
+        'file',
         delete $options{ bucketName },
         delete $options{ fileName }
         ;
@@ -474,7 +471,7 @@ sub download_file_by_name {
         my( $body, $hdr ) = @_;
         $self->log_message(2, sprintf "Fetching %s, received %d bytes", $url, length $body );
         my $ok = $hdr->{Status} =~ /^2\d\d/;
-        return $ok, $hdr->{Reason}, $body;
+        return( $ok, $hdr->{Reason}, $body );
     })
 }
 
