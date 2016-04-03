@@ -9,6 +9,10 @@ Backblaze::B2 - interface to the Backblaze B2 API
 
 =head1 SYNOPSIS
 
+=head1 TO DO
+
+Should switch to L<Promises> instead of "raw" AnyEvent
+
 =head1 METHODS
 
 =head2 C<< Backblaze::B2->new %options >>
@@ -37,22 +41,32 @@ sub new {
 
 =over 4
 
-=item 0. Have a telephone / mobile phone number you're willing to
+=item 0
+
+Have a telephone / mobile phone number you're willing to
 share with Backblaze
 
-=item 1. Register at for Backblaze B2 Cloud Storage at 
+=item 1
+
+Register at for Backblaze B2 Cloud Storage at 
 
 L<https://secure.backblaze.com/account_settings.htm?showPhone=true>
 
-=item 2. Add the phone number to your account at
+=item 2
+
+Add the phone number to your account at
 
 L<https://secure.backblaze.com/account_settings.htm?showPhone=true>
 
-=item 2. Enable Two-Factor verification through your phone at
+=item 3
+
+Enable Two-Factor verification through your phone at
 
 L<https://secure.backblaze.com/account_settings.htm?showPhone=true>
 
-=item 3. Create a JSON file named C<B2.credentials>
+=item 4
+
+Create a JSON file named C<B2.credentials>
 
 This file should live in your
 home directory
@@ -93,16 +107,18 @@ most likely use case.
     }
 
 The asynchronous API is identical to the synchronous API in spirit, but
-will return L<AnyEvent> condvar's. These condvars return
+will return L<Promises> . These condvars usually return
 two or more parameters upon completion:
 
-    my $cv = $b2->buckets();
-    my( $ok, $msg, @buckets ) = $cv->recv();
-    if( ! $ok ) {
-        die "Error: $msg";
-    };
-    for( @buckets ) {
-        ...
+    my $results = $b2->buckets();
+    $results->then( sub{ 
+        my( $ok, $msg, @buckets ) = @_;
+        if( ! $ok ) {
+            die "Error: $msg";
+        };
+        for( @buckets ) {
+            ...
+        }
     }
 
 The asynchronous API puts the burden of error handling into your code.
@@ -129,7 +145,6 @@ sub read_credentials {
     $self->api->read_credentials(@args)
 }
 
-# XXX Synchronous...
 sub authorize_account {
     my( $self, @args ) = @_;
     $self->api->authorize_account(@args)
@@ -206,6 +221,8 @@ sub new {
 }
 
 sub name { $_[0]->{bucketName} }
+#sub api { $_[0]->{api} }
+sub downloadUrl { join "", $_[0]->api->downloadUrl, $_[0]->name }
 sub id { $_[0]->{bucketId} }
 sub type { $_[0]->{bucketType} }
 sub account { $_[0]->{parent} }
@@ -251,6 +268,7 @@ sub files {
     
     my @res;
     
+    # XXX this needs to be turned into a Promises-based loop.
     my $fetch_more= 1;
     while( $fetch_more ) {
         my $files = $self->api->list_files(
@@ -260,7 +278,7 @@ sub files {
         push @res, @{ $files->{files} };
         $fetch_more = $options{ allFiles } && $files->{endFileName};
     };
-    map { $self->_new_file( %$_, folder => $self ) } @res
+    map { $self->_new_file( %$_, bucket => $self ) } @res
 }
 
 =head2 C<< ->upload_file( %options ) >>
@@ -313,17 +331,21 @@ will be calculated upon upload.
 sub upload_file {
     my( $self, %options ) = @_;
 
-    # XXX We are synchronous here!
-    my $upload_handle = $self->api->get_upload_url(
+    $self->api->get_upload_url(
         bucketId => $self->id,
-    );
-    my @res = $self->api->upload_file(
-        %options,
-        handle => $upload_handle
-    );
+    )->then(sub {
+        my( $upload_handle ) = @_;
+        
+        $self->api->upload_file(
+            %options,
+            handle => $upload_handle
+        );
+    })->then( sub {
+        my( @res ) = @_;
 
-    (my $res) = map { $self->_new_file( %$_, folder => $self ) } @res;
-    $res
+        (my $res) = map { $self->_new_file( %$_, bucket => $self ) } @res;
+        $res
+    });
 }
 
 =head2 C<< ->download_file_by_name( %options ) >>
@@ -362,15 +384,16 @@ use Scalar::Util 'weaken';
 
 sub new {
     my( $class, %options ) = @_;
-    weaken $options{ folder };
+    weaken $options{ bucket };
     bless \%options => $class,
 }
 
 sub name { $_[0]->{fileName} }
 sub id { $_[0]->{fileId} }
 sub action { $_[0]->{action} }
-sub folder { $_[0]->{folder} }
+sub bucket { $_[0]->{bucket} }
 sub size { $_[0]->{size} }
+sub downloadUrl { join "/", $_[0]->bucket->downloadUrl, $_[0]->name }
 
 1;
 
@@ -409,6 +432,23 @@ sub read_credentials {
     $self->api->read_credentials(@args)
 }
 
+sub downloadUrl { $_[0]->api->downloadUrl };
+sub apiUrl { $_[0]->api->apiUrl };
+
+sub await($) {
+    my $promise = $_[0];
+    my @res;
+    if( $promise->is_unfulfilled ) {
+        require AnyEvent;
+        my $await = AnyEvent->condvar;
+        $promise->then(sub{ $await->send(@_)});
+        @res = $await->recv;
+    } else {
+        @res = @{ $promise->result }
+    }
+    @res
+};
+
 sub AUTOLOAD {
     my( $self, @arguments ) = @_;
     $AUTOLOAD =~ /::([^:]+)$/
@@ -422,7 +462,8 @@ sub AUTOLOAD {
     no strict 'refs';
     my $new_method = *{"$namespace\::$method"} = sub {
         my $self = shift;
-        my( $ok, $msg, @results) = $self->api->$method( @_ )->recv;
+        warn "In <$namespace\::$method>";
+        my( $ok, $msg, @results) = await $self->api->$method( @_ );
         if( ! $ok ) {
             croak $msg;
         } else {
@@ -441,6 +482,8 @@ use MIME::Base64;
 use URI::QueryParam;
 use Carp qw(croak);
 
+use Promises
+    backend => ['AnyEvent'], 'deferred';
 use AnyEvent;
 use AnyEvent::HTTP;
 #use URI::Template;
@@ -490,37 +533,29 @@ sub read_credentials {
     $cred
 };
 
-sub make_json_response_decoder {
-    my( $self, $res, $req ) = @_;
+sub decode_json_response {
+    my($self, $body,$hdr) = @_;
     
-    die "Need a HTTP request handle to hold on to"
-        unless $req;
-    
-    return sub {
-        my($body,$hdr) = @_;
-        
-        $self->log_message(1, sprintf "Response status %d", $hdr->{Status});
+    $self->log_message(1, sprintf "HTTP Response status %d", $hdr->{Status});
 
-        if( !$body) {
-            $self->log_message(4, sprintf "No response body received");
-            $res->send(0, "No response body received", $hdr);
+    if( !$body) {
+        $self->log_message(4, sprintf "No response body received");
+        return (0, "No response body received", $hdr);
+        #warn Dumper $hdr;
+    } else {
+        
+        my $b = eval { decode_json( $body ); };
+        if( my $err = $@ ) {
+            $self->log_message(4, sprintf "Error decoding JSON response body: %s", $err);
+            return (0, sprintf("Error decoding JSON response body: %s", $err), $hdr);
+        } elsif( $hdr->{Status} =~ /^[45]\d\d$/ ) {
+            my $reason = $b->{message} || $hdr->{Reason};
+            my $status = $b->{status}  || $hdr->{Status};
+            $self->log_message(4, sprintf "HTTP error status: %s: %s", $status, $reason);
+            return( 0, sprintf(sprintf "HTTP error status: %s: %s", $status, $reason));
         } else {
-            
-            my $b = eval { decode_json( $body ); };
-            if( my $err = $@ ) {
-                $self->log_message(4, sprintf "Error decoding JSON response body: %s", $err);
-                $res->send(0, sprintf("Error decoding JSON response body: %s", $err), $hdr);
-            } elsif( $hdr->{Status} =~ /^[45]\d\d$/ ) {
-                my $reason = $b->{message} || $hdr->{Reason};
-                my $status = $b->{status}  || $hdr->{Status};
-                $self->log_message(4, sprintf "HTTP error status: %s: %s", $status, $reason);
-                $res->send(0, sprintf(sprintf "HTTP error status: %s: %s", $status, $reason));
-            } else {
-                $res->send(1, "", $b);
-            };
+            return (1, "", $b);
         };
-        undef $req;
-        undef $res;
     };
 }
 
@@ -554,16 +589,25 @@ sub apiUrl {
 }
 
 
+=head2 C<< ->request >>
+
+Returns a promise that will resolve to the response data and the headers from
+the request.
+
+=cut
+
 # You might want to override this if you want to use HIJK or
 # some other way. If your HTTP requestor is synchronous, just
 # return a
 # AnyEvent->condvar
 # which performs the real task.
+# Actually, this now returns just a Promise
+
 sub request {
     my( $self, %options) = @_;
     
     $options{ method } ||= 'GET';
-    my $completed = delete $options{ cb };
+    #my $completed = delete $options{ cb };
     my $method    = delete $options{ method };
     my $endpoint  = delete $options{ api_endpoint };
     my $headers = delete $options{ headers } || {};
@@ -589,12 +633,19 @@ sub request {
     };
     
     $self->log_message(1, sprintf "Sending %s request to %s", $method, $url);
-    return 
-        http_request $method => $url,
-            headers => $headers,
-            body => $body,
-            $completed,
+    
+    my $res = deferred;
+    
+    http_request $method => $url,
+        headers => $headers,
+        body => $body,
+        sub {
+            my( $data, $headers ) = @_;
+            $res->resolve($data, $headers)
+        },
     ;
+    
+    $res->promise
 }
 
 sub authorize_account {
@@ -605,27 +656,28 @@ sub authorize_account {
         or croak "Need an applicationKey";
     my $auth= encode_base64( "$options{accountId}:$options{ applicationKey }" );
 
-    my $res = AnyEvent->condvar();
-    my $store_credentials = sub {
-        
-        my( $cv ) = @_;
-        my( $ok, $msg, $cred ) = $cv->recv;
-        $self->log_message(1, sprintf "Storing authorization token");
-        $self->{credentials} = $cred;
-        undef $self;
-        $res->send($ok, $msg, $cred);
-    };    
-    my $got_credentials = AnyEvent->condvar( cb => $store_credentials );
     my $url = $self->{api_base} . "b2_authorize_account";
-    my $handle; $handle = $self->request(
+
+    $self->request(
         url => $url,
         headers => {
             "Authorization" => "Basic $auth"
         },
-        cb => $self->make_json_response_decoder($got_credentials, \$handle),
-    );
+    )->then( sub {
+        my( $body, $headers ) = @_;
+        $self->log_message(1, sprintf "Storing authorization token");
         
-    $res
+        my( $ok, $msg, $cred ) = $self->decode_json_response($body, $headers);
+        
+        die $msg
+            unless $ok;
+        
+        $self->{credentials} = $cred;
+        
+        undef $self; # just dissolve some references here
+        
+        return (1, "", $cred)
+    });
 }
 
 =head2 C<< $b2->create_bucket >>
@@ -652,16 +704,17 @@ sub create_bucket {
     $options{ accountId } ||= $self->accountId;
     $options{ bucketType } ||= 'allPrivate'; # let's be defensive here...
     
-    my $res = AnyEvent->condvar;
-    my $guard; $guard = $self->request(api_endpoint => 'b2_create_bucket',
+    $self->request(api_endpoint => 'b2_create_bucket',
         accountId => $options{ accountId },
         bucketName => $options{ bucketName },
         bucketType => $options{ bucketType },
-        cb => $self->make_json_response_decoder($res, \$guard),
         %options
-    );
+    )->then(sub {
+        
+        my( $body, $headers ) = @_;
+        $self->decode_json_response($body, $headers);
+    });
     
-    $res
 }
 
 =head2 C<< $b2->delete_bucket >>
@@ -702,6 +755,8 @@ sub delete_bucket {
 
 L<https://www.backblaze.com/b2/docs/b2_list_buckets.html>
 
+Returns the error status, the message and the payload.
+
 =cut
 
 sub list_buckets {
@@ -709,14 +764,13 @@ sub list_buckets {
     
     $options{ accountId } ||= $self->accountId;
     
-    my $res = AnyEvent->condvar;
-    my $guard; $guard = $self->request(api_endpoint => 'b2_list_buckets',
+    $self->request(api_endpoint => 'b2_list_buckets',
         accountId => $options{ accountId },
-        cb => $self->make_json_response_decoder($res, \$guard),
         %options
-    );
-    
-    $res
+    )->then(sub{
+        my( $data, $header ) = @_;
+        $self->decode_json_response($data, $header),
+    })
 }
 
 =head2 C<< $b2->get_upload_url >>
@@ -799,6 +853,7 @@ sub upload_file {
     my $mtime = delete $options{ mtime };
 
     my $res = AnyEvent->condvar;
+    warn "Storing as <$target_filename>";
     my $guard; $guard = $self->request(
         url => $handle->{uploadUrl},
         method => 'POST',
