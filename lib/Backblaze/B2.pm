@@ -9,10 +9,6 @@ Backblaze::B2 - interface to the Backblaze B2 API
 
 =head1 SYNOPSIS
 
-=head1 TO DO
-
-Should switch to L<Promises> instead of "raw" AnyEvent
-
 =head1 METHODS
 
 =head2 C<< Backblaze::B2->new %options >>
@@ -112,10 +108,7 @@ two or more parameters upon completion:
 
     my $results = $b2->buckets();
     $results->then( sub{ 
-        my( $ok, $msg, @buckets ) = @_;
-        if( ! $ok ) {
-            die "Error: $msg";
-        };
+        my( @buckets ) = @_;
         for( @buckets ) {
             ...
         }
@@ -125,16 +118,29 @@ The asynchronous API puts the burden of error handling into your code.
 
 =cut
 
+use vars '$API_BASE';
+$API_BASE = 'https://api.backblaze.com/b2api/v1/';
+
 sub new {
     my( $class, %options ) = @_;
     
+    # Hrr. We need to get at an asynchronous API here and potentially
+    # wrap the results to synchronous results in case the user wants them.
+    # Turtles all the way down, this means we can't reuse calls into ourselves...
+
     $options{ api } ||= 'Backblaze::B2::v1::Synchronous';
-    $options{ bucket_class } ||= 'Backblaze::B2::v1::Bucket';
-    $options{ file_class } ||= 'Backblaze::B2::v1::File';
     if( ! ref $options{ api }) {
         eval "require $options{ api }";
         my $class = delete $options{ api };
         $options{ api } = $class->new(%options);
+    };
+    
+    if( $options{ api }->isAsync ) {
+        $options{ bucket_class } ||= 'Backblaze::B2::v1::Bucket';
+        $options{ file_class } ||= 'Backblaze::B2::v1::File';
+    } else {
+        $options{ bucket_class } ||= 'Backblaze::B2::v1::Bucket::Synchronized';
+        $options{ file_class } ||= 'Backblaze::B2::v1::File::Synchronized';
     };
     
     bless \%options => $class
@@ -152,7 +158,7 @@ sub authorize_account {
 
 sub _new_bucket {
     my( $self, %options ) = @_;
-    # Should this one magically unwrap AnyEvent::condvar objects?!
+    
     $self->{bucket_class}->new(
         %options,
         api => $self->api,
@@ -160,6 +166,26 @@ sub _new_bucket {
         file_class => $self->{file_class}
     )
 }
+
+sub await($) {
+    my $promise = $_[0];
+    my @res;
+    if( $promise->is_unfulfilled ) {
+        warn "Waiting";
+        require AnyEvent;
+        my $await = AnyEvent->condvar;
+        $promise->then(sub{
+            $await->send(@_)
+        }, sub {
+            warn "@_";
+        });
+        @res = $await->recv;
+    } else {
+        warn "Have results already";
+        @res = @{ $promise->result }
+    }
+    @res
+};
 
 =head2 C<< ->buckets >>
 
@@ -172,9 +198,31 @@ the B2 account.
 
 sub buckets {
     my( $self ) = @_;
-    my $list = $self->api->list_buckets();
-    map { $self->_new_bucket( %$_ ) }
-        @{ $list->{buckets} }
+    my $list = $self->api->asyncApi->list_buckets()->then( sub {
+        my( $ok, $msg, $list ) = @_;
+        map { $self->_new_bucket( %$_ ) }
+            @{ $list->{buckets} }
+    });
+    
+    if( !$self->api->isAsync ) {
+        Backblaze::B2::v1::await $list
+    }
+}
+
+=head2 C<< ->bucket_from_id >>
+
+    my @buckets = $b2->bucket_from_id(
+        'deadbeef'
+    );
+
+Returns a L<Backblaze::B2::Bucket> object that has the given ID. It
+does not make an HTTP request to fetch the name and status of that bucket.
+
+=cut
+
+sub bucket_from_id {
+    my( $self, $bucket_id ) = @_;
+    $self->_new_bucket( bucketId => $bucket_id )
 }
 
 =head2 C<< ->create_bucket >>
@@ -193,11 +241,17 @@ Creates a new bucket and returns it.
 sub create_bucket {
     my( $self, %options ) = @_;
     $options{ type } ||= 'allPrivate';
-    my $bucket = $self->api->create_bucket(
+    my $b = $self->api->create_bucket(
         bucketName => $options{ name },
         bucketType => $options{ type },
-    );
-    $self->_new_bucket( %$bucket );
+    )->then( sub {
+        my( $bucket ) = @_;
+        $self->_new_bucket( %$bucket );
+    });
+
+    if( !$self->api->isAsync ) {
+        Backblaze::B2::v1::await $b
+    }
 }
 
 =head2 C<< ->api >>
@@ -330,22 +384,199 @@ will be calculated upon upload.
 
 sub upload_file {
     my( $self, %options ) = @_;
-
-    $self->api->get_upload_url(
+    
+    my $api = $self->api->asyncApi;
+    $api->get_upload_url(
         bucketId => $self->id,
     )->then(sub {
-        my( $upload_handle ) = @_;
-        
-        $self->api->upload_file(
+        my( $ok, $msg, $upload_handle ) = @_;
+        use Data::Dumper;
+        warn Dumper \%options;
+        $api->upload_file(
             %options,
             handle => $upload_handle
         );
     })->then( sub {
-        my( @res ) = @_;
+        my( $ok, $msg, @res ) = @_;
 
         (my $res) = map { $self->_new_file( %$_, bucket => $self ) } @res;
-        $res
+        $ok, $msg, $res
     });
+}
+
+=head2 C<< ->download_file_by_name( %options ) >>
+
+Downloads a file from this bucket by name:
+
+    my $content = $bucket->download_file_by_name(
+        fileName => 'the/public/name.txt',
+    );
+
+This saves you searching through the list of existing files
+if you already know the filename.
+
+=cut
+
+sub download_file_by_name {
+    my( $self, %options ) = @_;
+    $self->api->download_file_by_name(
+        bucketName => $self->name,
+        %options
+    );
+}
+
+=head2 C<< ->api >>
+
+Returns the underlying API object
+
+=cut
+
+sub api { $_[0]->{api} }
+
+package Backblaze::B2::v1::Bucket::Synchronized;
+use strict;
+use Carp qw(croak);
+
+sub name { $_[0]->{impl}->name }
+#sub api { $_[0]->{api} }
+sub downloadUrl { $_[0]->{impl}->downloadUrl }
+sub id { $_[0]->{impl}->id }
+sub type { $_[0]->{impl}->type }
+sub account { $_[0]->{impl}->parent }
+
+# Our simple method reflector
+use vars '$AUTOLOAD';
+sub AUTOLOAD {
+    my( $self, @arguments ) = @_;
+    $AUTOLOAD =~ /::([^:]+)$/
+        or croak "Invalid method name '$AUTOLOAD' called";
+    my $method = $1;
+    $self->impl->can( $method )
+        or croak "Unknown method '$method' called on $self";
+
+    # Install the subroutine for caching
+    my $namespace = ref $self;
+    no strict 'refs';
+    my $new_method = *{"$namespace\::$method"} = sub {
+        my $self = shift;
+        warn "In <$namespace\::$method>";
+        my( $ok, $msg, @results) = Backblaze::B2::v1::await $self->impl->$method( @_ );
+        if( ! $ok ) {
+            croak $msg;
+        } else {
+            use Data::Dumper;
+            warn Dumper \@results;
+            return wantarray ? @results : $results[0]
+        };
+    };
+
+    # Invoke the newly installed method
+    goto &$new_method;
+};
+
+sub new {
+    my( $class, %options ) = @_;
+    
+    my $self = {
+        impl => Backblaze::B2::v1::Bucket->new(%options),
+    };
+    
+    bless $self => $class,
+}
+
+sub impl { $_[0]->{impl} }
+
+sub _new_file {
+    my( $self, %options ) = @_;
+    # Should this one magically unwrap AnyEvent::condvar objects?!
+    $self->{file_class}->new(
+        %options,
+        api => $self->api,
+        bucket => $self
+    );
+}
+
+=head2 C<< ->files( %options ) >>
+
+Lists the files contained in this bucket
+
+    my @files = $bucket->files(
+        startFileName => undef,
+    );
+
+By default it returns only the first 1000
+files, but see the C<allFiles> parameter.
+
+=over 4
+
+=item C<< allFiles >>
+
+    allFiles => 1
+
+Passing in a true value for this parameter will make
+as many API calls as necessary to fetch all files.
+
+=back
+
+=cut
+
+sub files {
+    my( $self, %options ) = @_;
+    map { $self->_new_file( impl => $_ ) }
+        Backblaze::B2::v1::await $self->impl->files( %options );
+}
+
+=head2 C<< ->upload_file( %options ) >>
+
+Uploads a file into this bucket, potentially creating
+a new file version.
+
+    my $new_file = $bucket->upload_file(
+        file => 'some/local/file.txt',
+        target_file => 'the/public/name.txt',
+    );
+
+=over 4
+
+=item C<< file >>
+
+Local name of the source file. This file will be loaded
+into memory in one go.
+
+=item C<< target_file >>
+
+Name of the file on the B2 API. Defaults to the local name.
+
+The target file name will have backslashes replaced by forward slashes
+to comply with the B2 API.
+
+=item C<< mime_type >>
+
+Content-type of the stored file. Defaults to autodetection by the B2 API.
+
+=item C<< content >>
+
+If you don't have the local content in a file on disk, you can
+pass the content in as a string.
+
+=item C<< mtime >>
+
+Time in miliseconds since the epoch to when the content was created.
+Defaults to the current time.
+
+=item C<< sha1 >>
+
+Hexdigest of the SHA1 of the content. If this is missing, the SHA1
+will be calculated upon upload.
+
+=back
+
+=cut
+
+sub upload_file {
+    my( $self, %options ) = @_;
+
+    Backblaze::B2::v1::await $self->impl->upload_file( %options );
 }
 
 =head2 C<< ->download_file_by_name( %options ) >>
@@ -363,10 +594,8 @@ if you already know the filename.
 
 sub download_file_by_name {
     my( $self, %options ) = @_;
-    my $filename = delete $options{ file };
-    $self->api->download_file_by_name(
-        bucketName => $self->name,
-        fileName => $filename,
+    Backblaze::B2::v1::await $self->impl->download_file_by_name(
+        %options
     );
 }
 
@@ -378,7 +607,7 @@ Returns the underlying API object
 
 sub api { $_[0]->{api} }
 
-package Backblaze::B2::v1::File;
+package Backblaze::B2::v1::File::Synchronized;
 use strict;
 use Scalar::Util 'weaken';
 
@@ -394,562 +623,5 @@ sub action { $_[0]->{action} }
 sub bucket { $_[0]->{bucket} }
 sub size { $_[0]->{size} }
 sub downloadUrl { join "/", $_[0]->bucket->downloadUrl, $_[0]->name }
-
-1;
-
-package Backblaze::B2::v1::Synchronous;
-use strict;
-use vars qw($AUTOLOAD);
-use Carp qw(croak);
-use JSON::XS 'decode_json';
-
-use vars '$API_BASE';
-$API_BASE = 'https://api.backblaze.com/b2api/v1/';
-
-sub api { $_[0]->{api} }
-
-=head1 METHODS
-
-=head2 C<< ->new >>
-
-Creates a new synchronous instance.
-
-=cut
-
-sub new {
-    my( $class, %options ) = @_;
-    
-    $options{ api } ||= Backblaze::B2::v1::AnyEvent->new(
-        api_base => $API_BASE,
-        %options
-    );
-    
-    bless \%options => $class;
-}
-
-sub read_credentials {
-    my( $self, @args ) = @_;
-    $self->api->read_credentials(@args)
-}
-
-sub downloadUrl { $_[0]->api->downloadUrl };
-sub apiUrl { $_[0]->api->apiUrl };
-
-sub await($) {
-    my $promise = $_[0];
-    my @res;
-    if( $promise->is_unfulfilled ) {
-        require AnyEvent;
-        my $await = AnyEvent->condvar;
-        $promise->then(sub{ $await->send(@_)});
-        @res = $await->recv;
-    } else {
-        @res = @{ $promise->result }
-    }
-    @res
-};
-
-sub AUTOLOAD {
-    my( $self, @arguments ) = @_;
-    $AUTOLOAD =~ /::([^:]+)$/
-        or croak "Invalid method name '$AUTOLOAD' called";
-    my $method = $1;
-    $self->api->can( $method )
-        or croak "Unknown method '$method' called on $self";
-
-    # Install the subroutine for caching
-    my $namespace = ref $self;
-    no strict 'refs';
-    my $new_method = *{"$namespace\::$method"} = sub {
-        my $self = shift;
-        warn "In <$namespace\::$method>";
-        my( $ok, $msg, @results) = await $self->api->$method( @_ );
-        if( ! $ok ) {
-            croak $msg;
-        } else {
-            return wantarray ? @results : $results[0]
-        };
-    };
-
-    # Invoke the newly installed method
-    goto &$new_method;
-};
-
-package Backblaze::B2::v1::AnyEvent;
-use strict;
-use JSON::XS;
-use MIME::Base64;
-use URI::QueryParam;
-use Carp qw(croak);
-
-use Promises
-    backend => ['AnyEvent'], 'deferred';
-use AnyEvent;
-use AnyEvent::HTTP;
-#use URI::Template;
-use URI;
-use URI::Escape;
-use Digest::SHA1;
-use File::Basename;
-use Encode;
-use Data::Dumper;
-
-sub new {
-    my( $class, %options ) = @_;
-    
-    croak "Need an API base"
-        unless $options{ api_base };
-    
-    bless \%options => $class;
-}
-
-sub log_message {
-    my( $self ) = shift;
-    if( $self->{log_message}) {
-        goto &{ $self->{log_message}};
-    };
-}
-
-sub read_credentials {
-    my( $self, $file ) = @_;
-    
-    if( ! defined $file) {
-        require File::HomeDir;
-        $file = File::HomeDir->my_home . "/credentials.b2";
-        $self->log_message(0, "Using default credentials file '$file'");
-    };
-    
-    $self->log_message(1, "Reading credentials from '$file'");
-    
-    open my $fh, '<', $file
-        or croak "Couldn't read credentials from '$file': $!";
-    binmode $fh;
-    local $/;
-    my $json = <$fh>;
-    my $cred = decode_json( $json );
-    
-    $self->{credentials} = $cred;
-    
-    $cred
-};
-
-sub decode_json_response {
-    my($self, $body,$hdr) = @_;
-    
-    $self->log_message(1, sprintf "HTTP Response status %d", $hdr->{Status});
-
-    if( !$body) {
-        $self->log_message(4, sprintf "No response body received");
-        return (0, "No response body received", $hdr);
-        #warn Dumper $hdr;
-    } else {
-        
-        my $b = eval { decode_json( $body ); };
-        if( my $err = $@ ) {
-            $self->log_message(4, sprintf "Error decoding JSON response body: %s", $err);
-            return (0, sprintf("Error decoding JSON response body: %s", $err), $hdr);
-        } elsif( $hdr->{Status} =~ /^[45]\d\d$/ ) {
-            my $reason = $b->{message} || $hdr->{Reason};
-            my $status = $b->{status}  || $hdr->{Status};
-            $self->log_message(4, sprintf "HTTP error status: %s: %s", $status, $reason);
-            return( 0, sprintf(sprintf "HTTP error status: %s: %s", $status, $reason));
-        } else {
-            return (1, "", $b);
-        };
-    };
-}
-
-# Provide headers from the credentials, if available
-sub get_headers {
-    my( $self ) = @_;
-    if( my $token = $self->authorizationToken ) {
-        return Authorization => $token
-    };
-    return ()
-}
-
-sub accountId {
-    my( $self ) = @_;
-    $self->{credentials}->{accountId}
-}
-
-sub authorizationToken {
-    my( $self ) = @_;
-    $self->{credentials}->{authorizationToken}
-}
-
-sub downloadUrl {
-    my( $self ) = @_;
-    $self->{credentials}->{downloadUrl}
-}
-
-sub apiUrl {
-    my( $self ) = @_;
-    $self->{credentials}->{apiUrl}
-}
-
-
-=head2 C<< ->request >>
-
-Returns a promise that will resolve to the response data and the headers from
-the request.
-
-=cut
-
-# You might want to override this if you want to use HIJK or
-# some other way. If your HTTP requestor is synchronous, just
-# return a
-# AnyEvent->condvar
-# which performs the real task.
-# Actually, this now returns just a Promise
-
-sub request {
-    my( $self, %options) = @_;
-    
-    $options{ method } ||= 'GET';
-    #my $completed = delete $options{ cb };
-    my $method    = delete $options{ method };
-    my $endpoint  = delete $options{ api_endpoint };
-    my $headers = delete $options{ headers } || {};
-    $headers = { $self->get_headers, %$headers };
-    my $body = delete $options{ _body };
-        
-    my $url;
-    if( ! $options{url} ) {
-        croak "Don't know the api_endpoint for the request"
-            unless $endpoint;
-        $url = URI->new( join( "/b2api/v1/",
-            $self->apiUrl,
-            $endpoint)
-        );
-    } else {
-        $url = delete $options{ url };
-        $url = URI->new( $url )
-            if( ! ref $url );
-    };
-    for my $k ( keys %options ) {
-        my $v = $options{ $k };
-        $url->query_param_append($k, $v);
-    };
-    
-    $self->log_message(1, sprintf "Sending %s request to %s", $method, $url);
-    
-    my $res = deferred;
-    
-    http_request $method => $url,
-        headers => $headers,
-        body => $body,
-        sub {
-            my( $data, $headers ) = @_;
-            $res->resolve($data, $headers)
-        },
-    ;
-    
-    $res->promise
-}
-
-=head2 C<< ->json_request >>
-
-    my $res = $b2->json_request(...)->then(sub {
-        my( $ok, $message, @stuff ) = @_;
-    });
-
-Helper routine that expects a JSON formatted response
-and returns the decoded JSON structure.
-
-=cut
-
-sub json_request {
-    my( $self, %options ) = @_;
-    $self->request(
-        %options
-    )->then(sub {
-        
-        my( $body, $headers ) = @_;
-        $self->decode_json_response($body, $headers);
-    });
-}
-
-sub authorize_account {
-    my( $self, %options ) = @_;
-    $options{ accountId }
-        or croak "Need an accountId";
-    $options{ applicationKey }
-        or croak "Need an applicationKey";
-    my $auth= encode_base64( "$options{accountId}:$options{ applicationKey }" );
-
-    my $url = $self->{api_base} . "b2_authorize_account";
-
-    $self->json_request(
-        url => $url,
-        headers => {
-            "Authorization" => "Basic $auth"
-        },
-    )->then( sub {
-        my( $ok, $msg, $cred ) = @_;
-        $self->log_message(1, sprintf "Storing authorization token");
-        
-        die $msg
-            unless $ok;
-        
-        $self->{credentials} = $cred;
-        
-        undef $self; # just dissolve some references here
-        
-        return ( $ok, $msg, $cred );
-    });
-}
-
-=head2 C<< $b2->create_bucket >>
-
-  $b2->create_bucket(
-      bucketName => 'my_files',
-      bucketType => 'allPrivate',
-  );
-
-Bucket names can consist of: letters, digits, "-", and "_". 
-
-L<https://www.backblaze.com/b2/docs/b2_create_bucket.html>
-
-The C<bucketName> has to be B<globally> unique, so expect
-this request to fail, a lot.
-
-=cut
-
-sub create_bucket {
-    my( $self, %options ) = @_;
-    
-    croak "Need a bucket name"
-        unless defined $options{ bucketName };
-    $options{ accountId } ||= $self->accountId;
-    $options{ bucketType } ||= 'allPrivate'; # let's be defensive here...
-    
-    $self->json_request(api_endpoint => 'b2_create_bucket',
-        accountId => $options{ accountId },
-        bucketName => $options{ bucketName },
-        bucketType => $options{ bucketType },
-        %options
-    )
-}
-
-=head2 C<< $b2->delete_bucket >>
-
-  $b2->delete_bucket(
-      bucketId => ...,
-  );
-
-Bucket names can consist of: letters, digits, "-", and "_". 
-
-L<https://www.backblaze.com/b2/docs/b2_delete_bucket.html>
-
-The bucket must be empty of all versions of all files.
-
-=cut
-
-sub delete_bucket {
-    my( $self, %options ) = @_;
-    
-    croak "Need a bucketId"
-        unless defined $options{ bucketId };
-    $options{ accountId } ||= $self->accountId;
-    
-    my $res = AnyEvent->condvar;
-    $self->json_request(api_endpoint => 'b2_delete_bucket',
-        accountId => $options{ accountId },
-        bucketId => $options{ bucketId },
-        %options
-    );
-}
-
-=head2 C<< $b2->list_buckets >>
-
-  $b2->list_buckets();
-
-L<https://www.backblaze.com/b2/docs/b2_list_buckets.html>
-
-Returns the error status, the message and the payload.
-
-=cut
-
-sub list_buckets {
-    my( $self, %options ) = @_;
-    
-    $options{ accountId } ||= $self->accountId;
-    
-    $self->json_request(api_endpoint => 'b2_list_buckets',
-        accountId => $options{ accountId },
-        %options
-    )
-}
-
-=head2 C<< $b2->get_upload_url >>
-
-  my $upload_handle = $b2->get_upload_url();
-  $b2->upload_file( file => $file, handle => $upload_handle );
-
-L<https://www.backblaze.com/b2/docs/b2_get_upload_url.html>
-
-=cut
-
-sub get_upload_url {
-    my( $self, %options ) = @_;
-    
-    croak "Need a bucketId"
-        unless defined $options{ bucketId };
-
-    my $res = AnyEvent->condvar;
-    $self->request(api_endpoint => 'b2_get_upload_url',
-        %options
-    )->then(sub {
-        
-        my( $body, $headers ) = @_;
-        $self->decode_json_response($body, $headers);
-    });
-}
-
-=head2 C<< $b2->upload_file >>
-
-  my $upload_handle = $b2->get_upload_url();
-  $b2->upload_file(
-      file => $file,
-      handle => $upload_handle
-  );
-
-L<https://www.backblaze.com/b2/docs/b2_upload_file.html>
-
-Note: This method loads the complete file to be uploaded
-into memory.
-
-Note: The Backblaze B2 API is vague about when you need
-a new upload URL.
-
-=cut
-
-sub upload_file {
-    my( $self, %options ) = @_;
-    
-    croak "Need an upload handle"
-        unless defined $options{ handle };
-    my $handle = delete $options{ handle };
-
-    croak "Need a source file name"
-        unless defined $options{ file };
-    my $filename = delete $options{ file };
-        
-    my $target_filename = delete $options{ target_name };
-    $target_filename ||= $filename;
-    $target_filename =~ s!\\!/!g;
-    $target_filename = encode('UTF-8', $target_filename );
-    $target_filename =~ s!([^\x21-\x7d])!sprintf "%%%02x", ord $1!ge;
-    
-    my $mime_type = delete $options{ mime_type } || 'b2/x-auto';
-    
-    if( not defined $options{ content }) {
-        open my $fh, '<', $filename
-            or croak "Couldn't open '$filename': $!";
-        binmode $fh, ':raw';
-        $options{ content } = do { local $/; <$fh> }; # sluuuuurp
-        $options{ mtime } = ((stat($fh))[9]) * 1000;
-    };
-
-    my $payload = delete $options{ content };
-    if( not $options{ sha1 }) {
-        my $sha1 = Digest::SHA1->new;
-        $sha1->add( $payload );
-        $options{ sha1 } = $sha1->hexdigest;
-    };
-    my $digest = delete $options{ sha1 };
-    my $size = length($payload);
-    my $mtime = delete $options{ mtime };
-
-    my $res = AnyEvent->condvar;
-    warn "Storing as <$target_filename>";
-    my $guard; $guard = $self->request(
-        url => $handle->{uploadUrl},
-        method => 'POST',
-        _body => $payload,
-        headers => {
-            'Content-Type' => $mime_type,
-            'Content-Length' => $size,
-            'X-Bz-Content-Sha1' => $digest,
-            'X-Bz-File-Name' => $target_filename,
-            'Authorization' => $handle->{authorizationToken},
-        },
-        cb => $self->make_json_response_decoder($res, \$guard),
-        %options
-    );
-    
-    $res
-}
-
-=head2 C<< $b2->list_files >>
-
-  my $list = $b2->list_files(
-      startFileName => undef,
-      maxFileCount => 1000, # maximum per round
-      bucketId => ...,
-      
-  );
-
-L<https://www.backblaze.com/b2/docs/b2_list_files.html>
-
-=cut
-
-sub list_files {
-    my( $self, %options ) = @_;
-    
-    croak "Need a bucket id"
-        unless defined $options{ bucketId };
-
-    my $res = AnyEvent->condvar;
-    my $guard; $guard = $self->request(
-        api_endpoint => 'b2_list_files',
-        cb => $self->make_json_response_decoder($res, \$guard),
-        %options
-    );
-    
-    $res
-}
-
-=head2 C<< $b2->download_file_by_name >>
-
-  my $content = $b2->download_file_by_name(
-      bucketName => $my_bucket_name,
-      fileName => $my_file_name,
-  );
-
-L<https://www.backblaze.com/b2/docs/b2_download_file_by_name.html>
-
-=cut
-
-sub download_file_by_name {
-    my( $self, %options ) = @_;
-    
-    croak "Need a bucket name"
-        unless defined $options{ bucketName };
-    croak "Need a file name"
-        unless defined $options{ fileName };
-    my $url = join '/',
-        $self->{credentials}->{downloadUrl},
-        delete $options{ bucketName },
-        delete $options{ fileName }
-        ;
-    $self->log_message(1, sprintf "Fetching %s", $url );
-
-    my $res = AnyEvent->condvar;
-    my $guard; $guard = $self->request(
-        url => $url,
-        cb => sub {
-            my( $body, $hdr ) = @_;
-            $self->log_message(2, sprintf "Fetching %s, received %d bytes", $url, length $body );
-            my $ok = $hdr->{Status} =~ /^2\d\d/;
-            undef $guard;
-            $res->send( $ok, $hdr->{Reason}, $body );
-        },
-        %options
-    );
-    
-    $res
-}
 
 1;
