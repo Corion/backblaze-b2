@@ -17,7 +17,8 @@ use File::Basename;
 use Encode;
 use Data::Dumper;
 
-use vars '@CARP_NOT';
+use vars qw(@CARP_NOT $VERSION);
+$VERSION = '0.01';
 @CARP_NOT = qw(Backblaze::B2::v1::Synchronous);
 
 sub isAsync { 1 }
@@ -26,8 +27,11 @@ sub asyncApi { $_[0] }
 
 sub new {
     my( $class, %options ) = @_;
+
+    require Backblaze::B2;
     
-    $options{ api_base } //= $Backblaze::B2::v1::API_BASE;
+    $options{ api_base } //= $Backblaze::B2::v1::API_BASE
+                           = $Backblaze::B2::v1::API_BASE;
 
     croak "Need an API base"
         unless $options{ api_base };
