@@ -648,6 +648,28 @@ sub request {
     $res->promise
 }
 
+=head2 C<< ->json_request >>
+
+    my $res = $b2->json_request(...)->then(sub {
+        my( $ok, $message, @stuff ) = @_;
+    });
+
+Helper routine that expects a JSON formatted response
+and returns the decoded JSON structure.
+
+=cut
+
+sub json_request {
+    my( $self, %options ) = @_;
+    $self->request(
+        %options
+    )->then(sub {
+        
+        my( $body, $headers ) = @_;
+        $self->decode_json_response($body, $headers);
+    });
+}
+
 sub authorize_account {
     my( $self, %options ) = @_;
     $options{ accountId }
@@ -658,16 +680,14 @@ sub authorize_account {
 
     my $url = $self->{api_base} . "b2_authorize_account";
 
-    $self->request(
+    $self->json_request(
         url => $url,
         headers => {
             "Authorization" => "Basic $auth"
         },
     )->then( sub {
-        my( $body, $headers ) = @_;
+        my( $ok, $msg, $cred ) = @_;
         $self->log_message(1, sprintf "Storing authorization token");
-        
-        my( $ok, $msg, $cred ) = $self->decode_json_response($body, $headers);
         
         die $msg
             unless $ok;
@@ -676,7 +696,7 @@ sub authorize_account {
         
         undef $self; # just dissolve some references here
         
-        return (1, "", $cred)
+        return ( $ok, $msg, $cred );
     });
 }
 
@@ -704,17 +724,12 @@ sub create_bucket {
     $options{ accountId } ||= $self->accountId;
     $options{ bucketType } ||= 'allPrivate'; # let's be defensive here...
     
-    $self->request(api_endpoint => 'b2_create_bucket',
+    $self->json_request(api_endpoint => 'b2_create_bucket',
         accountId => $options{ accountId },
         bucketName => $options{ bucketName },
         bucketType => $options{ bucketType },
         %options
-    )->then(sub {
-        
-        my( $body, $headers ) = @_;
-        $self->decode_json_response($body, $headers);
-    });
-    
+    )
 }
 
 =head2 C<< $b2->delete_bucket >>
@@ -739,14 +754,11 @@ sub delete_bucket {
     $options{ accountId } ||= $self->accountId;
     
     my $res = AnyEvent->condvar;
-    my $guard; $guard = $self->request(api_endpoint => 'b2_delete_bucket',
+    $self->json_request(api_endpoint => 'b2_delete_bucket',
         accountId => $options{ accountId },
         bucketId => $options{ bucketId },
-        cb => $self->make_json_response_decoder($res, \$guard),
         %options
     );
-    
-    $res
 }
 
 =head2 C<< $b2->list_buckets >>
@@ -764,13 +776,10 @@ sub list_buckets {
     
     $options{ accountId } ||= $self->accountId;
     
-    $self->request(api_endpoint => 'b2_list_buckets',
+    $self->json_request(api_endpoint => 'b2_list_buckets',
         accountId => $options{ accountId },
         %options
-    )->then(sub{
-        my( $data, $header ) = @_;
-        $self->decode_json_response($data, $header),
-    })
+    )
 }
 
 =head2 C<< $b2->get_upload_url >>
@@ -789,12 +798,13 @@ sub get_upload_url {
         unless defined $options{ bucketId };
 
     my $res = AnyEvent->condvar;
-    my $guard; $guard = $self->request(api_endpoint => 'b2_get_upload_url',
-        cb => $self->make_json_response_decoder($res, \$guard),
+    $self->request(api_endpoint => 'b2_get_upload_url',
         %options
-    );
-    
-    $res
+    )->then(sub {
+        
+        my( $body, $headers ) = @_;
+        $self->decode_json_response($body, $headers);
+    });
 }
 
 =head2 C<< $b2->upload_file >>
