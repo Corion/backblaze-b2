@@ -239,8 +239,6 @@ sub authorize_account {
         
         $self->{credentials} = $cred;
         
-        undef $self; # just dissolve some references here
-        
         return ( $ok, $msg, $cred );
     });
 }
