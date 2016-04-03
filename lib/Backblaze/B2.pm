@@ -37,32 +37,22 @@ sub new {
 
 =over 4
 
-=item 0
-
-Have a telephone / mobile phone number you're willing to
+=item 0. Have a telephone / mobile phone number you're willing to
 share with Backblaze
 
-=item 1
-
-Register at for Backblaze B2 Cloud Storage at 
+=item 1. Register at for Backblaze B2 Cloud Storage at 
 
 L<https://secure.backblaze.com/account_settings.htm?showPhone=true>
 
-=item 2
-
-Add the phone number to your account at
+=item 2. Add the phone number to your account at
 
 L<https://secure.backblaze.com/account_settings.htm?showPhone=true>
 
-=item 3
-
-Enable Two-Factor verification through your phone at
+=item 3. Enable Two-Factor verification through your phone at
 
 L<https://secure.backblaze.com/account_settings.htm?showPhone=true>
 
-=item 4
-
-Create a JSON file named C<B2.credentials>
+=item 4. Create a JSON file named C<B2.credentials>
 
 This file should live in your
 home directory
@@ -72,6 +62,7 @@ with the application key and the account key:
       "applicationKey": ".............."
     }
 
+=back
 
 =cut
 

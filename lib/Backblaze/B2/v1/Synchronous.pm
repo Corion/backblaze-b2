@@ -1,7 +1,9 @@
 package Backblaze::B2::v1::Synchronous;
 use strict;
-use vars qw($AUTOLOAD);
+use vars qw($AUTOLOAD $VERSION);
 use Carp qw(croak);
+
+$VERSION = '0.01';
 
 sub isAsync { 0 }
 sub api { $_[0]->{api} }
@@ -17,6 +19,11 @@ Creates a new synchronous instance.
 
 sub new {
     my( $class, %options ) = @_;
+    
+    require Backblaze::B2;
+
+    $options{ api_base } //= $Backblaze::B2::v1::API_BASE
+                           = $Backblaze::B2::v1::API_BASE;
     
     $options{ api } ||= do {
         require Backblaze::B2::v1::AnyEvent;
