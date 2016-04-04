@@ -221,7 +221,7 @@ does not make an HTTP request to fetch the name and status of that bucket.
 
 sub bucket_from_id {
     my( $self, $bucket_id ) = @_;
-    $self->_new_bucket( bucketId => $bucket_id )
+    $self->_new_bucket( bucketId => $bucket_id );
 }
 
 =head2 C<< ->create_bucket >>
@@ -270,6 +270,11 @@ use Scalar::Util 'weaken';
 sub new {
     my( $class, %options ) = @_;
     weaken $options{ parent };
+    
+    # Whoa! We assume that the async version has the same class name
+    # as the synchronous version and just strip it off.
+    $options{ file_class } =~ s!::Synchronized$!!;
+    
     bless \%options => $class,
 }
 
@@ -283,6 +288,11 @@ sub account { $_[0]->{parent} }
 sub _new_file {
     my( $self, %options ) = @_;
     # Should this one magically unwrap AnyEvent::condvar objects?!
+    
+    warn $self->{file_class};
+    #use Data::Dumper;
+    #warn Dumper \%options;
+    
     $self->{file_class}->new(
         %options,
         api => $self->api,
@@ -317,21 +327,16 @@ as many API calls as necessary to fetch all files.
 sub files {
     my( $self, %options ) = @_;
     $options{ maxFileCount } ||= 1000;
-    $options{ startFileName } ||= undef;
+    #$options{ startFileName } ||= undef;
     
-    my @res;
-    
-    # XXX this needs to be turned into a Promises-based loop.
-    my $fetch_more= 1;
-    while( $fetch_more ) {
-        my $files = $self->api->asyncApi->list_files(
-            bucketId => $self->id,
-            %options,
-        );
-        push @res, @{ $files->{files} };
-        $fetch_more = $options{ allFiles } && $files->{endFileName};
-    };
-    map { $self->_new_file( %$_, bucket => $self ) } @res
+    $self->api->asyncApi->list_all_file_names(
+        bucketId => $self->id,
+        %options,
+    )->then( sub {
+        my( $ok, $msg, @res ) = @_;
+        
+        $ok, $msg, map { $self->_new_file( %$_, bucket => $self ) } @res
+    })
 }
 
 =head2 C<< ->upload_file( %options ) >>
@@ -477,6 +482,7 @@ sub new {
     
     my $self = {
         impl => Backblaze::B2::v1::Bucket->new(%options),
+        file_class => $options{ file_class },
     };
     
     bless $self => $class,
@@ -605,13 +611,16 @@ Returns the underlying API object
 
 sub api { $_[0]->{api} }
 
-package Backblaze::B2::v1::File::Synchronized;
+package Backblaze::B2::v1::File;
 use strict;
-use Scalar::Util 'weaken';
+#use Scalar::Util 'weaken'; # do we really want to weaken our link?!
+# The bucket doesn't hold a ref to us, so we don't want to weaken it
 
 sub new {
     my( $class, %options ) = @_;
-    weaken $options{ bucket };
+    #weaken $options{ bucket };
+    warn "$class: " . join ",", sort keys %options;
+    
     bless \%options => $class,
 }
 
@@ -621,5 +630,28 @@ sub action { $_[0]->{action} }
 sub bucket { $_[0]->{bucket} }
 sub size { $_[0]->{size} }
 sub downloadUrl { join "/", $_[0]->bucket->downloadUrl, $_[0]->name }
+
+package Backblaze::B2::v1::File::Synchronized;
+use strict;
+use Carp qw(croak);
+#use Scalar::Util 'weaken'; # do we really want to weaken our link?!
+# The bucket doesn't hold a ref to us, so we don't want to weaken it
+
+sub new {
+    my( $class, %options ) = @_;
+    #weaken $options{ bucket };
+    warn "$class: " . join ",", sort keys %options;
+    croak "Need impl" unless $options{ impl };
+    
+    bless \%options => $class,
+}
+
+sub name { $_[0]->{impl}->name }
+sub id { $_[0]->{impl}->id }
+sub action { $_[0]->{impl}->action }
+sub bucket { $_[0]->{impl}->bucket }
+sub size { $_[0]->{impl}->size }
+sub downloadUrl { $_[0]->{impl}->downloadUrl }
+
 
 1;

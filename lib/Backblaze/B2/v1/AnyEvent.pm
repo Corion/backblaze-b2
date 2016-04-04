@@ -415,30 +415,86 @@ sub upload_file {
     );
 }
 
-=head2 C<< $b2->list_files >>
+=head2 C<< $b2->list_file_names >>
 
-  my $list = $b2->list_files(
-      startFileName => undef,
+  my $startFileName;
+  my $list = $b2->list_file_names(
+      startFileName => $startFileName,
       maxFileCount => 1000, # maximum per round
       bucketId => ...,
       
   );
 
-L<https://www.backblaze.com/b2/docs/b2_list_files.html>
+L<https://www.backblaze.com/b2/docs/b2_list_file_names.html>
 
 =cut
 
-sub list_files {
+sub list_file_names {
     my( $self, %options ) = @_;
     
     croak "Need a bucket id"
         unless defined $options{ bucketId };
 
     $self->json_request(
-        api_endpoint => 'b2_list_files',
+        api_endpoint => 'b2_list_file_names',
         %options
     );
 }
+
+=head2 C<< $b2->list_all_file_names >>
+
+  my $list = $b2->list_all_file_names(
+      startFileName => $startFileName,
+      maxFileCount => 1000, # maximum per round
+      bucketId => ...,
+      
+  );
+
+Retrieves all filenames in a bucket
+
+=cut
+
+sub list_all_file_names {
+    my( $self, %options ) = @_;
+    
+    croak "Need a bucket id"
+        unless defined $options{ bucketId };
+
+    my @results;
+    
+    my $handle_response; $handle_response = sub {
+        my( $ok, $msg, $results ) = @_;
+        
+        $self->log_message(1, sprintf "Got filenames starting from '%s' to '%s'", 
+                            $options{startFileName} || '',
+                            $results->{nextFileName} || '');
+        use Data::Dumper;
+        warn Dumper $results;
+
+        push @results, @{ $results->{files} };
+        
+        if( $results->{ endFileName }) {
+            $options{ startFileName } = $results->{nextFileName};
+            
+            $self->log_message(1, sprintf "Requesting filenames starting from '%s'",
+                           $options{startFileName} || '');
+            # We recurse deeper, but AnyEvent should handle the stack for us
+            return 
+                $self->list_file_names( %options )
+                     ->then( $handle_response );
+        } else {
+            # We've collected all items
+            my $res = deferred;
+            $res->resolve(1, "", @results);
+            $res->promise
+        }
+    };
+    
+    $self->log_message(1, sprintf "Requesting filenames starting from '%s'", $options{startFileName} || '');
+    $self->list_file_names( %options )
+        ->then( $handle_response );
+}
+
 
 =head2 C<< $b2->download_file_by_name >>
 
