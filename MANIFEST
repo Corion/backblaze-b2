@@ -4,6 +4,7 @@ examples/authenticate.pl
 examples/create-bucket.pl
 examples/delete-bucket.pl
 examples/download-file.pl
+examples/list-bucket-contents.pl
 examples/list-buckets.pl
 examples/upload-file-async.pl
 examples/upload-file.pl
@@ -15,6 +16,7 @@ MANIFEST			This list of files
 MANIFEST.SKIP
 README
 README.mkdn
+t/00-load.t
 t/50-interactive-public-file.t
 xt/99-changes.t
 xt/99-compile.t
