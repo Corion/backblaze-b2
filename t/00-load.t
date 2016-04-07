@@ -8,7 +8,7 @@ use Test::More tests => 1;
 my $module;
 
 BEGIN {
-   $module  = "Plack::Middleware::Pod";
+   $module  = "Backblaze::B2";
    require_ok( $module );
 }
 
