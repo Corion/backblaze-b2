@@ -289,7 +289,7 @@ sub _new_file {
     my( $self, %options ) = @_;
     # Should this one magically unwrap AnyEvent::condvar objects?!
     
-    warn $self->{file_class};
+    #warn $self->{file_class};
     #use Data::Dumper;
     #warn Dumper \%options;
     
@@ -619,7 +619,7 @@ use strict;
 sub new {
     my( $class, %options ) = @_;
     #weaken $options{ bucket };
-    warn "$class: " . join ",", sort keys %options;
+    #warn "$class: " . join ",", sort keys %options;
     
     bless \%options => $class,
 }
@@ -640,7 +640,7 @@ use Carp qw(croak);
 sub new {
     my( $class, %options ) = @_;
     #weaken $options{ bucket };
-    warn "$class: " . join ",", sort keys %options;
+    #warn "$class: " . join ",", sort keys %options;
     croak "Need impl" unless $options{ impl };
     
     bless \%options => $class,

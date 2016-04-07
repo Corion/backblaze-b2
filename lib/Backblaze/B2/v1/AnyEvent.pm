@@ -468,8 +468,8 @@ sub list_all_file_names {
         $self->log_message(1, sprintf "Got filenames starting from '%s' to '%s'", 
                             $options{startFileName} || '',
                             $results->{nextFileName} || '');
-        use Data::Dumper;
-        warn Dumper $results;
+        #use Data::Dumper;
+        #warn Dumper $results;
 
         push @results, @{ $results->{files} };
         
