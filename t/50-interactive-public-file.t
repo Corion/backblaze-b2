@@ -15,8 +15,10 @@ if( ! $app_credentials_file) {
 
 $app_credentials_file ||= './app-credentials.json';
 
-BAIL_OUT sprintf 'No app_credentials read from %s; set $ENV{B2_CREDENTIALS_FILE} for interactive tests', $app_credentials_file
-    unless -f $app_credentials_file;
+SKIP: {
+    skip 1, sprintf 'No app_credentials read from %s; set $ENV{B2_CREDENTIALS_FILE} for interactive tests', $app_credentials_file
+        unless -f $app_credentials_file;
+}
 
 my $bucket_name = 'backblaze-b2-test-bucket';
 
