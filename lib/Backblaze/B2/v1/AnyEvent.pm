@@ -231,12 +231,12 @@ sub authorize_account {
         },
     )->then( sub {
         my( $ok, $msg, $cred ) = @_;
-        $self->log_message(1, sprintf "Storing authorization token");
         
-        die $msg
-            unless $ok;
-        
-        $self->{credentials} = $cred;
+        if( $ok ) {
+            $self->log_message(1, sprintf "Storing authorization token");
+            
+            $self->{credentials} = $cred;
+        };
         
         return ( $ok, $msg, $cred );
     });
