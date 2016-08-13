@@ -76,4 +76,11 @@ my $expected_content = do { local $/; <$fh> };
 
 is $content, $expected_content, "We can download what we stored";
 
+my $res = $bucket->get_download_authorization(
+    fileNamePrefix => $fetch_as,
+    validDurationInSeconds => 30,
+);
+is $res->{fileNamePrefix}, $fetch_as, "We get an authorization token for the file (prefix) we requested";
+isn't $res->{authorizationToken}, '', "We get a good authorization token back";
+
 done_testing;

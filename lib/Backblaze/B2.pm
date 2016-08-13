@@ -427,6 +427,28 @@ sub download_file_by_name {
     );
 }
 
+=head2 C<< ->get_download_authorization( %options ) >>
+
+Downloads a file from this bucket by name:
+
+    my $authToken = $bucket->get_download_authorization(
+        fileNamePrefix => '/members/downloads/',
+        validDurationInSeconds => 300, # five minutes
+    );
+
+This returns an authorization token that can download files with the
+given prefix.
+
+=cut
+
+sub get_download_authorization {
+    my( $self, %options ) = @_;
+    $self->api->asyncApi->get_download_authorization(
+        bucketId => $self->id,
+        %options
+    );
+}
+
 =head2 C<< ->api >>
 
 Returns the underlying API object
@@ -463,12 +485,12 @@ sub AUTOLOAD {
         my $self = shift;
         warn "In <$namespace\::$method>";
         my( $ok, $msg, @results) = Backblaze::B2::v1::await $self->impl->$method( @_ );
-        warn "Results: $ok/$msg/@results";
+        #warn "Results: $ok/$msg/@results";
         if( ! $ok ) {
             croak $msg;
         } else {
-            use Data::Dumper;
-            warn Dumper \@results;
+            #use Data::Dumper;
+            #warn Dumper \@results;
             return wantarray ? @results : $results[0]
         };
     };

@@ -532,4 +532,33 @@ sub download_file_by_name {
     })
 }
 
+=head2 C<< $b2->get_download_authorization >>
+
+  my $content = $b2->get_download_authorization(
+      bucketId => $my_bucket_id,
+      fileNamePrefix => $my_file_name,
+      validDurationInSeconds => 300, # you have five minutes to start the download
+  );
+
+L<https://www.backblaze.com/b2/docs/b2_get_download_authorization.html>
+
+=cut
+
+sub get_download_authorization {
+    my( $self, %options ) = @_;
+    
+    croak "Need a bucket id"
+        unless defined $options{ bucketId };
+    croak "Need a file name prefix"
+        unless defined $options{ fileNamePrefix };
+    croak "Need a duration for the token"
+        unless defined $options{ validDurationInSeconds };
+
+    $self->json_request(
+        api_endpoint => 'b2_get_download_authorization',
+        %options
+    );
+}
+
+
 1;
