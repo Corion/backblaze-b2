@@ -168,16 +168,16 @@ sub request {
         my $v = $options{ $k };
         $url->query_param_append($k, $v);
     };
-    
     $self->log_message(1, sprintf "Sending %s request to %s", $method, $url);
     
     my $res = deferred;
-    
-    http_request $method => $url,
+    my $req;
+    $req = http_request $method => $url,
         headers => $headers,
         body => $body,
         sub {
             my( $data, $headers ) = @_;
+            undef $req;
             $res->resolve($data, $headers);
             #undef $res; # justin case
         },
