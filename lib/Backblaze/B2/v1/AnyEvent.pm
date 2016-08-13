@@ -9,7 +9,6 @@ use Promises
     backend => ['AnyEvent'], 'deferred';
 use AnyEvent;
 use AnyEvent::HTTP;
-#use URI::Template;
 use URI;
 use URI::Escape;
 use Digest::SHA1;
