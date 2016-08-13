@@ -111,7 +111,7 @@ The asynchronous API puts the burden of error handling into your code.
 =cut
 
 use vars '$API_BASE';
-$API_BASE = 'https://api.backblaze.com/b2api/v1/';
+$API_BASE = 'https://api.backblazeb2.com/b2api/v1/';
 
 sub new {
     my( $class, %options ) = @_;
@@ -280,7 +280,7 @@ sub new {
 
 sub name { $_[0]->{bucketName} }
 #sub api { $_[0]->{api} }
-sub downloadUrl { join "", $_[0]->api->downloadUrl, $_[0]->name }
+sub downloadUrl { join "/", $_[0]->api->downloadUrl, $_[0]->name }
 sub id { $_[0]->{bucketId} }
 sub type { $_[0]->{bucketType} }
 sub account { $_[0]->{parent} }
