@@ -17,7 +17,7 @@ use Encode;
 use Data::Dumper;
 
 use vars qw(@CARP_NOT $VERSION);
-$VERSION = '0.01';
+$VERSION = '0.02';
 @CARP_NOT = qw(Backblaze::B2::v1::Synchronous);
 
 sub isAsync { 1 }

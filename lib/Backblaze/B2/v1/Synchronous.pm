@@ -3,7 +3,7 @@ use strict;
 use vars qw($AUTOLOAD $VERSION);
 use Carp qw(croak);
 
-$VERSION = '0.01';
+$VERSION = '0.02';
 
 sub isAsync { 0 }
 sub api { $_[0]->{api} }

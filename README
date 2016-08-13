@@ -180,6 +180,18 @@ METHODS
     This saves you searching through the list of existing files if you
     already know the filename.
 
+ ->get_download_authorization( %options )
+
+    Downloads a file from this bucket by name:
+
+        my $authToken = $bucket->get_download_authorization(
+            fileNamePrefix => '/members/downloads/',
+            validDurationInSeconds => 300, # five minutes
+        );
+
+    This returns an authorization token that can download files with the
+    given prefix.
+
  ->api
 
     Returns the underlying API object
